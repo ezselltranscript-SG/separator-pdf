@@ -1,51 +1,43 @@
-import os
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
 from PyPDF2 import PdfReader, PdfWriter
-from typing import List
 from io import BytesIO
-import base64
+import zipfile
 
 app = FastAPI()
 
 @app.post("/dividir")
 async def dividir_pdf(file: UploadFile = File(...)):
-    """
-    Recibe un archivo PDF, lo divide cada 2 páginas y devuelve los PDFs como base64.
-    """
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="El archivo debe ser un PDF")
 
     try:
-        # Leer archivo en memoria
         contenido_pdf = await file.read()
         lector = PdfReader(BytesIO(contenido_pdf))
         total_paginas = len(lector.pages)
-        archivos_generados: List[dict] = []
 
-        for i in range(0, total_paginas, 2):
-            escritor = PdfWriter()
-            escritor.add_page(lector.pages[i])
-            if i + 1 < total_paginas:
-                escritor.add_page(lector.pages[i + 1])
+        # Crear ZIP en memoria
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as zip_file:
+            for i in range(0, total_paginas, 2):
+                escritor = PdfWriter()
+                escritor.add_page(lector.pages[i])
+                if i + 1 < total_paginas:
+                    escritor.add_page(lector.pages[i + 1])
 
-            salida_buffer = BytesIO()
-            escritor.write(salida_buffer)
-            salida_buffer.seek(0)
+                salida_buffer = BytesIO()
+                escritor.write(salida_buffer)
+                salida_buffer.seek(0)
 
-            # Codificar el archivo PDF dividido a base64
-            encoded_pdf = base64.b64encode(salida_buffer.read()).decode('utf-8')
-            nombre = f"{file.filename[:-4]}_{i+1}_{min(i+2, total_paginas)}.pdf"
+                nombre_archivo = f"{file.filename[:-4]}_{i+1}_{min(i+2, total_paginas)}.pdf"
+                zip_file.writestr(nombre_archivo, salida_buffer.read())
 
-            archivos_generados.append({
-                "nombre": nombre,
-                "contenido_base64": encoded_pdf
-            })
-
-        return JSONResponse(content={
-            "mensaje": "PDF dividido exitosamente",
-            "archivos_generados": archivos_generados
-        })
+        zip_buffer.seek(0)
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/x-zip-compressed",
+            headers={"Content-Disposition": "attachment; filename=archivos_divididos.zip"}
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al procesar el PDF: {str(e)}")
