@@ -3,36 +3,25 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from PyPDF2 import PdfReader, PdfWriter
 from typing import List
-import shutil
+from io import BytesIO
+import base64
 
 app = FastAPI()
-
-# Directorios donde se guardan archivos temporales
-UPLOAD_FOLDER = "/home/tu_usuario/pdfuploads"
-OUTPUT_FOLDER = "/home/tu_usuario/pdftemp"
-
-# Crear carpetas si no existen
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 @app.post("/dividir")
 async def dividir_pdf(file: UploadFile = File(...)):
     """
-    Recibe un archivo PDF, lo divide cada 2 páginas y devuelve los nombres de salida.
+    Recibe un archivo PDF, lo divide cada 2 páginas y devuelve los PDFs como base64.
     """
-    # Validación del archivo
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="El archivo debe ser un PDF")
 
-    # Guardar archivo en disco temporalmente
-    filepath = os.path.join(UPLOAD_FOLDER, file.filename)
-    with open(filepath, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
     try:
-        lector = PdfReader(filepath)
+        # Leer archivo en memoria
+        contenido_pdf = await file.read()
+        lector = PdfReader(BytesIO(contenido_pdf))
         total_paginas = len(lector.pages)
-        nombres_salidas: List[str] = []
+        archivos_generados: List[dict] = []
 
         for i in range(0, total_paginas, 2):
             escritor = PdfWriter()
@@ -40,17 +29,22 @@ async def dividir_pdf(file: UploadFile = File(...)):
             if i + 1 < total_paginas:
                 escritor.add_page(lector.pages[i + 1])
 
-            nombre_salida = f"{file.filename[:-4]}_{i+1}_{min(i+2, total_paginas)}.pdf"
-            ruta_salida = os.path.join(OUTPUT_FOLDER, nombre_salida)
+            salida_buffer = BytesIO()
+            escritor.write(salida_buffer)
+            salida_buffer.seek(0)
 
-            with open(ruta_salida, "wb") as salida_pdf:
-                escritor.write(salida_pdf)
+            # Codificar el archivo PDF dividido a base64
+            encoded_pdf = base64.b64encode(salida_buffer.read()).decode('utf-8')
+            nombre = f"{file.filename[:-4]}_{i+1}_{min(i+2, total_paginas)}.pdf"
 
-            nombres_salidas.append(nombre_salida)
+            archivos_generados.append({
+                "nombre": nombre,
+                "contenido_base64": encoded_pdf
+            })
 
         return JSONResponse(content={
             "mensaje": "PDF dividido exitosamente",
-            "archivos_generados": nombres_salidas
+            "archivos_generados": archivos_generados
         })
 
     except Exception as e:
